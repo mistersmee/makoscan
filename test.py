@@ -5,6 +5,9 @@ from gi.repository import Gtk
 import google.generativeai as genai
 import os
 
+file = open('apikey.txt', 'r')
+
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 class MainWindow(Gtk.Window):
     def __init__(self):
