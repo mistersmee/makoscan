@@ -9,7 +9,6 @@ from gi.repository import Gtk, GLib
 import time
 import google.generativeai as genai
 
-
 class PacketCaptureApp(Gtk.Window):
     def __init__(self):
         super().__init__(title="MAKKOscan")
@@ -89,6 +88,12 @@ class PacketCaptureApp(Gtk.Window):
         self.start_button.connect("clicked", self.start_scanning)
         self.page1.attach(self.start_button, 0, 4, 2, 1)
 
+        # Stop Scan Button (Initially Hidden)
+        self.stop_button = Gtk.Button(label="Stop Scanning")
+        self.stop_button.connect("clicked", self.stop_scanning)
+        self.stop_button.set_visible(False)
+        self.page1.attach(self.stop_button, 0, 5, 2, 1)
+
         # Packet Counter
         self.packet_counter = Gtk.Label(label="Packets Captured: 0")
         self.page1.attach(self.packet_counter, 0, 5, 2, 1)
@@ -124,8 +129,19 @@ class PacketCaptureApp(Gtk.Window):
         send_button.connect("clicked", self.analyse_llm)
         self.page3.pack_start(send_button, False, False, 0)
 
-        # Output Label
+        # TextView for Analysis Output
+        self.analysis_output_buffer = Gtk.TextBuffer()
+        self.analysis_output_view = Gtk.TextView(buffer=self.analysis_output_buffer)
+        self.analysis_output_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.analysis_output_view.set_editable(False)  # Make it read-only
 
+        # Scrollable container for the text view
+        scrolled_window = Gtk.ScrolledWindow()
+        scrolled_window.set_hexpand(True)
+        scrolled_window.set_vexpand(True)
+        scrolled_window.add(self.analysis_output_view)
+
+        self.page3.pack_start(scrolled_window, True, True, 0)
 
     def _populate_interfaces(self):
         """Populate available network interfaces."""
@@ -194,8 +210,19 @@ class PacketCaptureApp(Gtk.Window):
        self.stop_event.clear()
        self.start_button.set_sensitive(False)
 
+       # Hide Start Button and Show Stop Button
+       self.start_button.set_visible(False)
+       self.stop_button.set_visible(True)
+
        self.capture_thread = Thread(target=self.capture_packets, args=(interface, filter_text, packet_limit, time_limit))
        self.capture_thread.start()
+
+    def stop_scanning(self, button):
+        """Stop the packet capture process."""
+        self.stop_event.set()
+        # Show Start Button and Hide Stop Button
+        self.start_button.set_visible(True)
+        self.stop_button.set_visible(False)
 
     def capture_packets(self, interface, filter_text, packet_limit, time_limit):
        """Perform packet capture using PyShark with capture filters and time limits."""
@@ -222,6 +249,9 @@ class PacketCaptureApp(Gtk.Window):
 
            capture.close()
 
+           GLib.idle_add(self.start_button.set_visible, True)
+           GLib.idle_add(self.stop_button.set_visible, False)
+
            self._append_output(f"Capture complete. File saved as {pcap_file}.")
 
        except Exception as e:
@@ -234,8 +264,50 @@ class PacketCaptureApp(Gtk.Window):
         """Append text to the output field."""
         print(text)
 
+    def load_local_model(self):
+        """Load a local Hugging Face model for text generation."""
+        model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
+        return tokenizer, model
+
     def analyse_llm(self, button):
-        pass
+        """Send the translated text file to a local Hugging Face model."""
+        txt_file = "capture.txt"
+
+
+        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+        if not os.path.exists(txt_file):
+            self.analysis_output_buffer.set_text("No translated text file found.")
+            return
+
+        try:
+            with open(txt_file, "r") as f:
+                text_data = f.read()
+
+            # Load the tokenizer and model
+            #tokenizer, model = self.load_local_model()
+            model = genai.GenerativeModel('gemini-1.5-flash')
+
+            # Define a structured prompt
+            custom_prompt = (
+                "Analyze the following network traffic log and provide insights into potential threats, "
+                "malicious patterns, or suspicious activity. Summarize key observations and include relevant "
+                "protocol details. Provide a conclusion on whether the traffic seems benign or risky:\n\n"
+                f"{text_data}"
+            )
+
+            response_text = model.generate_content(custom_prompt)
+            # Tokenize and generate response
+            #inputs = tokenizer(custom_prompt, return_tensors="pt").to("cuda" if torch.cuda.is_available() else "cpu")
+            #outputs = model.generate(**inputs, do_sample=True)
+            #response_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+            # Display response in GUI
+            self.analysis_output_buffer.set_text(response_text.text)
+        except Exception as e:
+            self.analysis_output_buffer.set_text(f"Error during analysis: {e}")
 
 if __name__ == "__main__":
     app = PacketCaptureApp()
