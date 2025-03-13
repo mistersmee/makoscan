@@ -9,41 +9,87 @@ from gi.repository import Gtk, GLib
 import time
 import google.generativeai as genai
 
-class PacketCaptureApp(Gtk.Window):
+class MAKKOscan(Gtk.Window):
     def __init__(self):
         super().__init__(title="MAKKOscan")
         self.set_border_width(10)
         self.set_default_size(400, 400)
 
-        # Create a Stack and StackSwitcher
+        # Create the main vertical box layout
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+
+        # Persistent Quit Button at the Top
+        quit_button = Gtk.Button(label="Quit")
+        quit_button.connect("clicked", Gtk.main_quit)
+        vbox.pack_start(quit_button, False, False, 10)
+
+        # Create StackSwitcher (hidden initially)
+        self.stack_switcher = Gtk.StackSwitcher()
+        self.stack_switcher.set_halign(Gtk.Align.CENTER)
+
+        # Create Stack (page container)
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
         self.stack.set_transition_duration(500)
 
-        self.stack_switcher = Gtk.StackSwitcher()
-        self.stack_switcher.set_stack(self.stack)
+        # Create Start Page (Hidden tabs)
+        self.start_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.stack.add_titled(self.start_page, "start", "Welcome")
 
-        # Main layout with StackSwitcher and Stack
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        vbox.pack_start(self.stack_switcher, False, False, 0)
-        vbox.pack_start(self.stack, True, True, 0)
-        self.add(vbox)
+        # Add App Name, Description, and Start Button
+        label_title = Gtk.Label(label="<span size='20000' weight='bold'>MAKKOscan</span>")
+        label_title.set_use_markup(True)
+        label_title.set_halign(Gtk.Align.CENTER)
 
-        # Add the first page (Packet Capture)
+        label_desc = Gtk.Label(label="A network packet capture and analysis tool.")
+        label_desc.set_halign(Gtk.Align.CENTER)
+
+        start_button = Gtk.Button(label="Start")
+        start_button.connect("clicked", self.on_start_button_clicked)
+        start_button.set_halign(Gtk.Align.CENTER)
+
+        self.start_page.pack_start(label_title, False, False, 10)
+        self.start_page.pack_start(label_desc, False, False, 5)
+        self.start_page.pack_start(start_button, False, False, 15)
+
+        # Add Other Pages
         self.page1 = Gtk.Grid(column_spacing=10, row_spacing=10)
         self.stack.add_titled(self.page1, "page1", "Packet Capture")
 
-        # Add the second page (PCAP Translation)
         self.page2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.stack.add_titled(self.page2, "page2", "PCAP <-> Plaintext")
 
-        # Add the third page (LLM Analysis)
         self.page3 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         self.stack.add_titled(self.page3, "page3", "LLM Analysis")
 
+        # Initialize pages
         self._setup_page1()
         self._setup_page2()
         self._setup_page3()
+
+        # Initially hide the tab switcher
+        self.stack_switcher.set_stack(self.stack)
+
+        # Show the Start Page first
+        self.stack.set_visible_child(self.start_page)
+
+        # Add elements to the main layout
+        vbox.pack_start(self.stack, True, True, 0)
+        vbox.pack_start(self.stack_switcher, False, False, 0)  # Initially hidden
+
+        self.add(vbox)
+
+        # Defer hiding the tabs until after UI is initialized
+        GLib.idle_add(self.hide_tabs)
+
+    def hide_tabs(self):
+        """Hides the tab switcher after initialization."""
+        self.stack_switcher.set_visible(False)
+        return False  # Stops GLib.idle_add from calling it again
+
+    def on_start_button_clicked(self, button):
+        self.stack_switcher.set_visible(True)  # Show tabs
+        self.stack.set_visible_child(self.page1)  # Switch to first real page
 
     def _setup_page1(self):
         """Set up the first page for packet capture."""
@@ -88,15 +134,9 @@ class PacketCaptureApp(Gtk.Window):
         self.start_button.connect("clicked", self.start_scanning)
         self.page1.attach(self.start_button, 0, 4, 2, 1)
 
-        # Stop Scan Button (Initially Hidden)
-        self.stop_button = Gtk.Button(label="Stop Scanning")
-        self.stop_button.connect("clicked", self.stop_scanning)
-        self.stop_button.set_visible(False)
-        self.page1.attach(self.stop_button, 0, 5, 2, 1)
-
         # Packet Counter
         self.packet_counter = Gtk.Label(label="Packets Captured: 0")
-        self.page1.attach(self.packet_counter, 0, 5, 2, 1)
+        self.page1.attach(self.packet_counter, 0, 6, 2, 1)
 
         # Internal State
         self.capture_thread = None
@@ -210,6 +250,12 @@ class PacketCaptureApp(Gtk.Window):
        self.stop_event.clear()
        self.start_button.set_sensitive(False)
 
+        # Stop Scan Button (Initially Hidden)
+       self.stop_button = Gtk.Button(label="Stop Scanning")
+       self.stop_button.connect("clicked", self.stop_scanning)
+       self.page1.attach(self.stop_button, 0, 5, 2, 1)
+
+
        # Hide Start Button and Show Stop Button
        self.start_button.set_visible(False)
        self.stop_button.set_visible(True)
@@ -264,13 +310,6 @@ class PacketCaptureApp(Gtk.Window):
         """Append text to the output field."""
         print(text)
 
-    def load_local_model(self):
-        """Load a local Hugging Face model for text generation."""
-        model_name = "HuggingFaceTB/SmolLM2-1.7B-Instruct"
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
-        return tokenizer, model
-
     def analyse_llm(self, button):
         """Send the translated text file to a local Hugging Face model."""
         txt_file = "capture.txt"
@@ -286,9 +325,7 @@ class PacketCaptureApp(Gtk.Window):
             with open(txt_file, "r") as f:
                 text_data = f.read()
 
-            # Load the tokenizer and model
-            #tokenizer, model = self.load_local_model()
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash')
 
             # Define a structured prompt
             custom_prompt = (
@@ -299,10 +336,6 @@ class PacketCaptureApp(Gtk.Window):
             )
 
             response_text = model.generate_content(custom_prompt)
-            # Tokenize and generate response
-            #inputs = tokenizer(custom_prompt, return_tensors="pt").to("cuda" if torch.cuda.is_available() else "cpu")
-            #outputs = model.generate(**inputs, do_sample=True)
-            #response_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
             # Display response in GUI
             self.analysis_output_buffer.set_text(response_text.text)
@@ -310,7 +343,7 @@ class PacketCaptureApp(Gtk.Window):
             self.analysis_output_buffer.set_text(f"Error during analysis: {e}")
 
 if __name__ == "__main__":
-    app = PacketCaptureApp()
+    app = MAKKOscan()
     app.connect("destroy", Gtk.main_quit)
     app.show_all()
     Gtk.main()
