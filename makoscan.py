@@ -1,195 +1,178 @@
 import gi
-import pyshark
+import google.generativeai as genai
 import os
+import pyshark
+import sys
+import time
 from threading import Thread, Event
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib
 
-import time
-import google.generativeai as genai
-
 class MAKKOscan(Gtk.Window):
     def __init__(self):
         super().__init__(title="MAKKOscan")
         self.set_border_width(10)
-        self.set_default_size(400, 400)
+        self.set_default_size(500, 300)
 
-        # Create the main vertical box layout
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.stop_event = Event()
+        self.current_page = 0
+        self.pages = [
+            self.build_start_page(),
+            self.build_packet_capture_page(),
+            self.build_pcap_to_plaintext_page(),
+            self.build_llm_analysis_page()
+        ]
 
-        # Persistent Quit Button at the Top
-        quit_button = Gtk.Button(label="Quit")
-        quit_button.connect("clicked", Gtk.main_quit)
-        vbox.pack_start(quit_button, False, False, 10)
-
-        # Create StackSwitcher (hidden initially)
-        self.stack_switcher = Gtk.StackSwitcher()
-        self.stack_switcher.set_halign(Gtk.Align.CENTER)
-
-        # Create Stack (page container)
         self.stack = Gtk.Stack()
-        self.stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        self.stack.set_transition_duration(500)
+        for page in self.pages:
+            self.stack.add_named(page, page.get_name())
 
-        # Create Start Page (Hidden tabs)
-        self.start_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.stack.add_titled(self.start_page, "start", "Welcome")
+        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.main_box.pack_start(self.stack, True, True, 0)
 
-        # Add App Name, Description, and Start Button
-        label_title = Gtk.Label(label="<span size='20000' weight='bold'>MAKKOscan</span>")
-        label_title.set_use_markup(True)
-        label_title.set_halign(Gtk.Align.CENTER)
+        self.button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        self.next_button = Gtk.Button(label="Next")
+        self.next_button.connect("clicked", self.next_page)
+        self.next_button.set_sensitive(False)  # Initially disabled on the first page
+        self.quit_button = Gtk.Button(label="Quit")
+        self.quit_button.connect("clicked", self.quit_app)
 
-        label_desc = Gtk.Label(label="A network packet capture and analysis tool.")
-        label_desc.set_halign(Gtk.Align.CENTER)
+        self.back_button = Gtk.Button(label="Back")
+        self.back_button.connect("clicked", self.prev_page)
+        self.back_button.set_sensitive(False)  # Initially disabled on the first page
 
+        self.button_box.pack_start(self.back_button, False, False, 0)
+        self.button_box.pack_end(self.quit_button, False, False, 0)
+        self.button_box.pack_end(self.next_button, False, False, 0)
+
+        self.main_box.pack_end(self.button_box, False, False, 0)
+        self.add(self.main_box)
+        self.show_all()
+
+    def build_start_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_name("start")
+
+        title = Gtk.Label(label="MAKKOscan")
+        title.set_markup("<b><big>MAKKOscan</big></b>")
+        desc = Gtk.Label(label="A network packet capture and analysis tool.")
         start_button = Gtk.Button(label="Start")
-        start_button.connect("clicked", self.on_start_button_clicked)
-        start_button.set_halign(Gtk.Align.CENTER)
+        start_button.connect("clicked", self.next_page)
 
-        self.start_page.pack_start(label_title, False, False, 10)
-        self.start_page.pack_start(label_desc, False, False, 5)
-        self.start_page.pack_start(start_button, False, False, 15)
+        box.pack_start(title, False, False, 0)
+        box.pack_start(desc, False, False, 0)
+        box.pack_start(start_button, False, False, 0)
 
-        # Add Other Pages
-        self.page1 = Gtk.Grid(column_spacing=10, row_spacing=10)
-        self.stack.add_titled(self.page1, "page1", "Packet Capture")
+        return box
 
-        self.page2 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.stack.add_titled(self.page2, "page2", "PCAP <-> Plaintext")
+    def build_packet_capture_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_name("packet_capture")
 
-        self.page3 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        self.stack.add_titled(self.page3, "page3", "LLM Analysis")
-
-        # Initialize pages
-        self._setup_page1()
-        self._setup_page2()
-        self._setup_page3()
-
-        # Initially hide the tab switcher
-        self.stack_switcher.set_stack(self.stack)
-
-        # Show the Start Page first
-        self.stack.set_visible_child(self.start_page)
-
-        # Add elements to the main layout
-        vbox.pack_start(self.stack, True, True, 0)
-        vbox.pack_start(self.stack_switcher, False, False, 0)  # Initially hidden
-
-        self.add(vbox)
-
-        # Defer hiding the tabs until after UI is initialized
-        GLib.idle_add(self.hide_tabs)
-
-    def hide_tabs(self):
-        """Hides the tab switcher after initialization."""
-        self.stack_switcher.set_visible(False)
-        return False  # Stops GLib.idle_add from calling it again
-
-    def on_start_button_clicked(self, button):
-        self.stack_switcher.set_visible(True)  # Show tabs
-        self.stack.set_visible_child(self.page1)  # Switch to first real page
-
-    def _setup_page1(self):
-        """Set up the first page for packet capture."""
-        # Interface Selection
-        self.interface_label = Gtk.Label(label="Select Interface:")
-        self.page1.attach(self.interface_label, 0, 0, 1, 1)
+        title = Gtk.Label(label="Packet Capture")
+        title.set_markup("<b>Packet Capture</b>")
 
         self.interface_combo = Gtk.ComboBoxText()
         self._populate_interfaces()
-        self.page1.attach(self.interface_combo, 1, 0, 1, 1)
-
-        # Filter Selection
-        self.filter_label = Gtk.Label(label="Select Filter:")
-        self.page1.attach(self.filter_label, 0, 1, 1, 1)
-
         self.filter_combo = Gtk.ComboBoxText()
         self.filter_combo.append_text("None")
         self.filter_combo.append_text("TCP")
         self.filter_combo.append_text("HTTP")
         self.filter_combo.append_text("port 80")
-        self.filter_combo.set_active(0)  # Default to 'None'
-        self.page1.attach(self.filter_combo, 1, 1, 1, 1)
-
-        # Packet Limit
-        self.limit_label = Gtk.Label(label="Packet Limit:")
-        self.page1.attach(self.limit_label, 0, 2, 1, 1)
+        self.filter_combo.set_active(0)
 
         self.limit_entry = Gtk.Entry()
         self.limit_entry.set_placeholder_text("Enter max packets")
-        self.page1.attach(self.limit_entry, 1, 2, 1, 1)
-
-        # Time Limit
-        self.time_label = Gtk.Label(label="Time Limit (seconds):")
-        self.page1.attach(self.time_label, 0, 3, 1, 1)
-
         self.time_entry = Gtk.Entry()
         self.time_entry.set_placeholder_text("Enter time in seconds")
-        self.page1.attach(self.time_entry, 1, 3, 1, 1)
 
-        # Start Scan Button
         self.start_button = Gtk.Button(label="Start Scanning")
         self.start_button.connect("clicked", self.start_scanning)
-        self.page1.attach(self.start_button, 0, 4, 2, 1)
 
-        # Packet Counter
+        self.stop_button = Gtk.Button(label="Stop Scanning")
+        self.stop_button.connect("clicked", self.stop_scanning)
+        GLib.idle_add(self.stop_button.set_visible, False)
+
         self.packet_counter = Gtk.Label(label="Packets Captured: 0")
-        self.page1.attach(self.packet_counter, 0, 6, 2, 1)
 
-        # Internal State
-        self.capture_thread = None
-        self.is_capturing = False
-        self.stop_event = Event()
+        box.pack_start(title, False, False, 0)
+        box.pack_start(self.interface_combo, False, False, 0)
+        box.pack_start(self.filter_combo, False, False, 0)
+        box.pack_start(self.limit_entry, False, False, 0)
+        box.pack_start(self.time_entry, False, False, 0)
+        box.pack_start(self.start_button, False, False, 0)
+        box.pack_start(self.stop_button, False, False, 0)
+        box.pack_start(self.packet_counter, False, False, 0)
 
-    def _setup_page2(self):
-        """Set up the second page for PCAP translation."""
-        # Instructions
-        instructions = Gtk.Label(label="Translate the captured PCAP file to plaintext.")
-        self.page2.pack_start(instructions, False, False, 0)
+        return box
 
-        # Translate Button
-        translate_button = Gtk.Button(label="Translate PCAP")
-        translate_button.connect("clicked", self.translate_pcap)
-        self.page2.pack_start(translate_button, False, False, 0)
+    def build_pcap_to_plaintext_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_name("pcap_plaintext")
 
-        # Output Label
+        title = Gtk.Label(label="PCAP to Plaintext Converter")
+        title.set_markup("<b>PCAP to Plaintext</b>")
+        self.translate_button = Gtk.Button(label="Translate PCAP")
+        self.translate_button.connect("clicked", self.translate_pcap)
         self.translation_status = Gtk.Label(label="No translation performed yet.")
-        self.page2.pack_start(self.translation_status, False, False, 0)
 
-    def _setup_page3(self):
-        """Set up the third page for LLM Analysis."""
-        # Instructions
-        instructions = Gtk.Label(label="Send plaintext of packet capture file to LLM for analysis.")
-        self.page3.pack_start(instructions, False, False, 0)
+        box.pack_start(title, False, False, 0)
+        box.pack_start(self.translate_button, False, False, 0)
+        box.pack_start(self.translation_status, False, False, 0)
 
-        # Send button
-        send_button = Gtk.Button(label="Analyse with LLM")
-        send_button.connect("clicked", self.analyse_llm)
-        self.page3.pack_start(send_button, False, False, 0)
+        return box
 
-        # TextView for Analysis Output
+    def build_llm_analysis_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_name("llm_analysis")
+
+        title = Gtk.Label(label="LLM Analysis")
+        title.set_markup("<b>LLM Analysis</b>")
+        self.analyze_button = Gtk.Button(label="Analyze with LLM")
+        self.analyze_button.connect("clicked", self.analyse_llm)
         self.analysis_output_buffer = Gtk.TextBuffer()
         self.analysis_output_view = Gtk.TextView(buffer=self.analysis_output_buffer)
-        self.analysis_output_view.set_wrap_mode(Gtk.WrapMode.WORD)
-        self.analysis_output_view.set_editable(False)  # Make it read-only
 
-        # Scrollable container for the text view
         scrolled_window = Gtk.ScrolledWindow()
         scrolled_window.set_hexpand(True)
         scrolled_window.set_vexpand(True)
         scrolled_window.add(self.analysis_output_view)
 
-        self.page3.pack_start(scrolled_window, True, True, 0)
+        box.pack_start(title, False, False, 0)
+        box.pack_start(self.analyze_button, False, False, 0)
+        box.pack_start(scrolled_window, True, True, 0)
+
+        return box
+
+    def next_page(self, widget):
+        """Navigate to the next page."""
+        if self.current_page < len(self.pages) - 1:
+            self.current_page += 1
+            self.stack.set_visible_child_name(self.pages[self.current_page].get_name())
+            self.update_navigation_buttons()
+
+    def prev_page(self, widget):
+        """Navigate to the previous page."""
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.stack.set_visible_child_name(self.pages[self.current_page].get_name())
+            self.update_navigation_buttons()
+
+    def update_navigation_buttons(self):
+        """Update the state of navigation buttons."""
+        self.back_button.set_sensitive(self.current_page > 0)
+        self.next_button.set_sensitive(self.current_page < len(self.pages) - 1)
+
+    def quit_app(self, widget):
+        Gtk.main_quit()
 
     def _populate_interfaces(self):
-        """Populate available network interfaces."""
         try:
             interfaces = os.listdir('/sys/class/net')
             for iface in interfaces:
                 self.interface_combo.append_text(iface)
-            self.interface_combo.set_active(0)  # Default to the first interface
+            self.interface_combo.set_active(0)
         except Exception as e:
             print(f"Error fetching interfaces: {e}")
 
@@ -250,15 +233,8 @@ class MAKKOscan(Gtk.Window):
        self.stop_event.clear()
        self.start_button.set_sensitive(False)
 
-        # Stop Scan Button (Initially Hidden)
-       self.stop_button = Gtk.Button(label="Stop Scanning")
-       self.stop_button.connect("clicked", self.stop_scanning)
-       self.page1.attach(self.stop_button, 0, 5, 2, 1)
-
-
-       # Hide Start Button and Show Stop Button
-       self.start_button.set_visible(False)
-       self.stop_button.set_visible(True)
+       GLib.idle_add(self.start_button.set_visible, False)
+       GLib.idle_add(self.stop_button.set_visible, True)
 
        self.capture_thread = Thread(target=self.capture_packets, args=(interface, filter_text, packet_limit, time_limit))
        self.capture_thread.start()
@@ -341,6 +317,7 @@ class MAKKOscan(Gtk.Window):
             self.analysis_output_buffer.set_text(response_text.text)
         except Exception as e:
             self.analysis_output_buffer.set_text(f"Error during analysis: {e}")
+
 
 if __name__ == "__main__":
     app = MAKKOscan()
