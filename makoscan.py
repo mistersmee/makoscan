@@ -5,6 +5,8 @@ import pyshark
 import sys
 import time
 from threading import Thread, Event
+import subprocess
+import webbrowser
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib
@@ -129,10 +131,24 @@ class MAKKOscan(Gtk.Window):
 
         title = Gtk.Label(label="LLM Analysis")
         title.set_markup("<b>LLM Analysis</b>")
+
         self.analyze_button = Gtk.Button(label="Analyze with LLM")
         self.analyze_button.connect("clicked", self.analyse_llm)
+
+        self.export_button = Gtk.Button(label="Export to PDF")
+        self.export_button.connect("clicked", self.export_to_pdf)
+        GLib.idle_add(self.export_button.set_visible, False)
+
+        self.open_pdf_button = Gtk.Button(label="Open PDF")
+        self.open_pdf_button.connect("clicked", self.open_pdf)
+        GLib.idle_add(self.open_pdf_button.set_visible, False)
+
+        self.status_label = Gtk.Label(label="")
+
         self.analysis_output_buffer = Gtk.TextBuffer()
         self.analysis_output_view = Gtk.TextView(buffer=self.analysis_output_buffer)
+        self.analysis_output_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.analysis_output_view.set_editable(False)
 
         scrolled_window = Gtk.ScrolledWindow()
         scrolled_window.set_hexpand(True)
@@ -142,6 +158,8 @@ class MAKKOscan(Gtk.Window):
         box.pack_start(title, False, False, 0)
         box.pack_start(self.analyze_button, False, False, 0)
         box.pack_start(scrolled_window, True, True, 0)
+        box.pack_start(self.export_button, False, False, 0)
+        box.pack_start(self.open_pdf_button, False, False, 0)
 
         return box
 
@@ -290,7 +308,6 @@ class MAKKOscan(Gtk.Window):
         """Send the translated text file to a local Hugging Face model."""
         txt_file = "capture.txt"
 
-
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
         if not os.path.exists(txt_file):
@@ -315,9 +332,47 @@ class MAKKOscan(Gtk.Window):
 
             # Display response in GUI
             self.analysis_output_buffer.set_text(response_text.text)
+            # Show export button after analysis is done
+            GLib.idle_add(self.export_button.set_visible, True)
+
         except Exception as e:
             self.analysis_output_buffer.set_text(f"Error during analysis: {e}")
 
+    def export_to_pdf(self, button):
+        """Save LLM analysis result as Markdown and convert to PDF using Pandoc."""
+        markdown_file = "analysis.md"
+        pdf_file = "analysis.pdf"
+
+        start, end = self.analysis_output_buffer.get_bounds()
+        result_text = self.analysis_output_buffer.get_text(start, end, True)
+
+        if not result_text.strip():
+            GLib.idle_add(self.status_label.set_text, "No analysis result to export.")
+            return
+
+        try:
+            with open(markdown_file, "w") as md_file:
+                md_file.write("# LLM Analysis Result\n\n")
+                md_file.write(result_text)
+
+            # Convert Markdown to PDF using Pandoc
+            subprocess.run(["pandoc", markdown_file, "-o", pdf_file], check=True)
+
+            # Show success message and enable "Open PDF" button
+            GLib.idle_add(self.status_label.set_text, f"Exported to {pdf_file}")
+            GLib.idle_add(self.open_pdf_button.set_visible, True)
+
+        except Exception as e:
+            GLib.idle_add(self.status_label.set_text, f"Error exporting to PDF: {e}")
+
+
+    def open_pdf(self, button):
+        """Open the exported PDF using the default system viewer."""
+        pdf_file = "analysis.pdf"
+        if os.path.exists(pdf_file):
+            webbrowser.open(pdf_file)  # Open the PDF
+        else:
+            GLib.idle_add(self.status_label.set_text, "PDF file not found.")
 
 if __name__ == "__main__":
     app = MAKKOscan()
