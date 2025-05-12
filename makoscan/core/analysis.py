@@ -30,7 +30,12 @@ def analyze_with_llm(txt_file):
         custom_prompt = (
             "Analyze the following network traffic log and provide insights into potential threats, "
             "malicious patterns, or suspicious activity. Summarize key observations and include relevant "
-            "protocol details. Provide a conclusion on whether the traffic seems benign or risky:\n\n"
+            "protocol details. Provide a conclusion on whether the traffic seems benign or risky. The conclusion should be "
+            "in the format given below, and should be at the very beginning. "
+            "**Final Conclusion:** (Use one or two words and wrap it like below using inline HTML)\n"
+            "- <span style='background-color:green; color:white; padding:2px'>Safe</span>\n"
+            "- <span style='background-color:yellow; color:black; padding:2px'>Potential Risk</span>\n"
+            "- <span style='background-color:red; color:white; padding:2px'>Risky</span>\n\n"
             f"{text_data}"
         )
 

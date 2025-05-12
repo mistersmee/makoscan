@@ -20,7 +20,7 @@ def export_to_pdf_file(result_text):
             md_file.write(result_text)
 
         # Convert Markdown to PDF using Pandoc
-        subprocess.run(["pandoc", markdown_file, "-o", pdf_file], check=True)
+        subprocess.run(["pandoc", "-t", "html", "-o", pdf_file, markdown_file], check=True)
         return True
     except Exception as e:
         print(f"Error exporting to PDF: {e}")
