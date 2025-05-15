@@ -4,3 +4,4 @@
 *.md
 *.pdf
 __pycache__/
+venv/
