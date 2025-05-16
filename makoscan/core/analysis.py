@@ -24,7 +24,7 @@ def analyze_with_llm(txt_file):
         with open(txt_file, "r") as f:
             text_data = f.read()
 
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
 
         # Define a structured prompt
         custom_prompt = (
